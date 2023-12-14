@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+
+<launch>
+
+
+
+<param name="/use_sim_time" value="false"/>
+
+
+<node pkg="zed_pkg" type="main" name="zed2Cam" output="screen">
+ <param name="visualise" type="bool" value="true" />
+</node>
+
+<node pkg="kalman_filter" type="kalman_filter_new.py" name="kalman_filter_new" output="screen">
+</node>
+
+
+
+</launch>
