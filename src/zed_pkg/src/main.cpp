@@ -41,6 +41,20 @@
 
 #include <sl/Camera.hpp>
 #include "utils.hpp"
+//new
+// Sample includes
+#if ENABLE_GUI
+#include "GLViewer.hpp"
+#include "TrackingViewer.hpp"
+#endif
+
+// Using std and sl namespaces
+using namespace std;
+using namespace sl;
+//bool is_playback = false;
+//void print(string msg_prefix, ERROR_CODE err_code = ERROR_CODE::SUCCESS, string msg_suffix = "");
+//void parseArgs(int argc, char **argv, InitParameters& param);
+//endnew
 
 constexpr float CONFIDENCE_THRESHOLD = 0;
 constexpr float NMS_THRESHOLD = 0.4;
@@ -83,6 +97,15 @@ std::vector<sl::uint2> cvt(const cv::Rect &bbox_in){
 
 int main(int argc, char** argv) {
 
+    
+    //new
+//#ifdef _SL_JETSON_
+//    const bool isJetson = true;
+//#else
+ //   const bool isJetson = false;
+//#endif
+    //newend
+    
     bool visualise = false;
 
     ros::init(argc, argv, "zed2Cam");
@@ -122,6 +145,10 @@ int main(int argc, char** argv) {
     init_parameters.depth_mode = sl::DEPTH_MODE::PERFORMANCE;
     init_parameters.coordinate_system = sl::COORDINATE_SYSTEM::RIGHT_HANDED_Z_UP; // RVIZ's coordinate system is right_handed
 
+    //new
+    //parseArgs(argc, argv, init_parameters);
+    //endnew
+
     //if using video file
     if (argc >= 2) {
         std::string zed_opt = argv[1];
@@ -140,6 +167,7 @@ int main(int argc, char** argv) {
     detection_parameters.enable_tracking = true;
     // Define the model as custom box object to specify that the inference is done externally
     detection_parameters.detection_model = sl::OBJECT_DETECTION_MODEL::CUSTOM_BOX_OBJECTS;
+    detection_parameters.instance_module_id = 1; // select instance ID new by kai
     returned_state = zed.enableObjectDetection(detection_parameters);
     if (returned_state != sl::ERROR_CODE::SUCCESS) {
         print("enableObjectDetection", returned_state, "\nExit program.");
@@ -150,6 +178,43 @@ int main(int argc, char** argv) {
     sl::Resolution pc_resolution(std::min((int) camera_config.resolution.width, 720), std::min((int) camera_config.resolution.height, 404));
     auto camera_info = zed.getCameraInformation(pc_resolution).camera_configuration;
 
+
+    //new 
+    // Set body initialization parameters
+    BodyTrackingParameters body_tracking_parameters;
+    body_tracking_parameters.enable_tracking = true;
+    body_tracking_parameters.enable_segmentation = false; // designed to give person pixel mask
+    body_tracking_parameters.detection_model = BODY_TRACKING_MODEL::HUMAN_BODY_MEDIUM;
+    body_tracking_parameters.instance_module_id = 0; // select instance ID
+
+    // Set runtime parameters
+    BodyTrackingRuntimeParameters detection_parameters_rt;
+    detection_parameters_rt.detection_confidence_threshold = 40;
+
+    if (detection_parameters.enable_tracking) {
+    // Set positional tracking parameters
+    PositionalTrackingParameters positional_tracking_parameters;
+    // Enable positional tracking
+    zed.enablePositionalTracking(positional_tracking_parameters);
+    }
+
+    returned_state = zed.enableBodyTracking(body_tracking_parameters);
+    if (returned_state != ERROR_CODE::SUCCESS) {
+        print("enableBodyTracking", returned_state, "\nExit program.");
+        zed.close();
+        return EXIT_FAILURE;
+    }
+
+    sl::Bodies bodies; // Structure containing all the detected bodies
+    // grab runtime parameters
+    RuntimeParameters runtime_parameters;
+    runtime_parameters.measure3D_reference_frame = sl::REFERENCE_FRAME::WORLD;
+
+    if (zed.grab(runtime_parameters) == ERROR_CODE::SUCCESS) {
+        zed.retrieveBodies(bodies, detection_parameters_rt); // Retrieve the detected bodies
+    }
+
+    //endnew 
 
     //Declare all sensor variables
     sl::Mat left_sl, point_cloud;
@@ -299,6 +364,33 @@ int main(int argc, char** argv) {
             obstacle_msg.header.stamp = ros::Time::now();
             obstacle_msg.header.frame_id = "map";
 
+            //new
+            //Bodies skeletons;
+            for (int i = 0; i < bodies.body_list.size(); i++) {
+                sl::BodyData body = bodies.body_list[i];
+                //sl::BodyData object = objects.object_list[i];
+
+
+                unsigned int body_id = body.id; // Get the object id
+
+                //if person is too close publish bools to change robot speed.
+                if (body.position.x <=1 ){ // within 1m stop
+                    std_msgs::Bool bool_msg;
+                    bool_msg.data=true;
+                    stop_obj_pub.publish(bool_msg);
+                   
+                    
+
+                }
+
+                if (body.position.x <=3 ){ //within 3m slow
+                    std_msgs::Bool bool_msg;
+                    bool_msg.data=true;
+                    slow_obj_pub.publish(bool_msg);
+                }
+            }
+
+
             // Loop through all detected objects
             for (int i = 0; i < objects.object_list.size(); i++) {
                 
@@ -307,17 +399,17 @@ int main(int argc, char** argv) {
                 unsigned int object_id = object.id; // Get the object id
 
                 //if person is too close publish bools to change robot speed.
-                if (object.position.x <=1 && object_id == 1){ //object_label ==1 ==person
-                    std_msgs::Bool bool_msg;
-                    bool_msg.data=true;
-                    stop_obj_pub.publish(bool_msg);
-                }
+                //if (object.position.x <=1 && object_id == 1){ //object_label ==1 ==person
+                //    std_msgs::Bool bool_msg;
+                //    bool_msg.data=true;
+                //    stop_obj_pub.publish(bool_msg);
+                //}
 
-                if (object.position.x <=3 && object_id == 1){ //add and if object class = person
-                    std_msgs::Bool bool_msg;
-                    bool_msg.data=true;
-                    slow_obj_pub.publish(bool_msg);
-                }
+                //if (object.position.x <=3 && object_id == 1){ //add and if object class = person
+                //    std_msgs::Bool bool_msg;
+                //    bool_msg.data=true;
+                //    slow_obj_pub.publish(bool_msg);
+                //}
 
 
                 // Custom obstacles for teb_local_planner
@@ -397,4 +489,7 @@ int main(int argc, char** argv) {
         }  
     }
     return 0;
+
+
+
 }
