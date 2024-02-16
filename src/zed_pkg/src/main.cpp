@@ -34,14 +34,13 @@
 #include <chrono>
 #include <cmath>
 
-
-
 #include <opencv2/opencv.hpp>
 #include <opencv2/core.hpp>
 #include <opencv2/dnn.hpp>
 #include <opencv2/dnn/all_layers.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/highgui.hpp>
+
 // Flag to disable the GUI when using on jetson
 #define ENABLE_GUI 1
 
@@ -143,10 +142,6 @@ int main(int argc, char **argv) {
     // Detection runtime parameters for objects
     int detection_confidence_od = 20;
     ObjectDetectionRuntimeParameters detection_parameters_rt(detection_confidence_od);
-    // To select a set of specific object classes:
-    //detection_parameters_rt.object_class_filter = { OBJECT_CLASS::ELECTRONICS, OBJECT_CLASS::SPORT,
-    //    OBJECT_CLASS::ANIMAL, OBJECT_CLASS::BAG, OBJECT_CLASS::VEHICLE, OBJECT_CLASS::FRUIT_VEGETABLE };
-
 
     // Detection runtime parameters for bodies
     // default detection threshold, apply to all object class
@@ -161,13 +156,7 @@ int main(int argc, char **argv) {
     cam_w_pose.pose_data.setIdentity();
     Objects objects;
     Bodies skeletons; // structure containing all detected bodies
-
     //declare sensor variables
-    //sl::Mat left_sl;
-    //sl::Mat left_image, right_image;
-    //sl::ObjectDetectionRuntimeParameters objectTracker_parameters_rt;
-    //sl::Pose prev_pose;
-
     sl::SensorsData sensors_data;
     sl::SensorsData::IMUData imu_data;
 
@@ -215,104 +204,13 @@ int main(int argc, char **argv) {
 #endif
     //loop containing information to be published and updated in real time
     while (true) {
-        /*
-        zed.getPosition(cam_w_pose, REFERENCE_FRAME::WORLD);
-
-        viewer.updateData(point_cloud, objects, skeletons, cam_w_pose.pose_data);
-
-            //track_view_generator.generate_view(objects, cam_w_pose, image_track_ocv, objects.is_tracked);
-            //endnew
-
-            //Publishers for all essential data
-        ros::Time current_time = ros::Time::now();
-        n.getParam("visualise", visualise); //check for visualisation parameter status
         
-        
-            //PointCloud publication
-        if (visualise=true){
-            sensor_msgs::PointCloud2Ptr pointcloudMsg = boost::make_shared<sensor_msgs::PointCloud2>();
-            pointcloudMsg->header.stamp = current_time;
-            pointcloudMsg->header.frame_id="map";
-            int ptsCount = pc_resolution.width * pc_resolution.height;
-
-            if (pointcloudMsg->width != pc_resolution.width || pointcloudMsg->height != pc_resolution.height) {
-
-                pointcloudMsg->is_bigendian = false;
-                pointcloudMsg->is_dense = false;
-                pointcloudMsg->width = pc_resolution.width;
-                pointcloudMsg->height = pc_resolution.height;
-                sensor_msgs::PointCloud2Modifier modifier(*pointcloudMsg);
-                modifier.setPointCloud2Fields(4, "x", 1, sensor_msgs::PointField::FLOAT32, "y", 1, sensor_msgs::PointField::FLOAT32,
-                    "z", 1, sensor_msgs::PointField::FLOAT32, "rgb", 1, sensor_msgs::PointField::FLOAT32);
-            }
-
-                // Data copy
-            sl::Vector4<float>* cpu_cloud = point_cloud.getPtr<sl::float4>();
-            float* ptCloudPtr = (float*)(&pointcloudMsg->data[0]);
-
-            // We can do a direct memcpy since data organization is the same
-            memcpy(ptCloudPtr, (float*)cpu_cloud, 4 * ptsCount * sizeof(float));
-
-            // Pointcloud publishing
-            point_cloud_pub.publish(pointcloudMsg);
-        }*/
-
-        /*std_msgs::Bool bool_msg;
-        bool_msg.data=true;
-        slow_obj_pub.publish(bool_msg);*/
-        /*int nb_detection = 0;
-        while (nb_detection < 100) {
-        if (zed.grab() == ERROR_CODE::SUCCESS) {
-                zed.retrieveBodies(skeletons, body_tracking_parameters_rt);
-
-                if (skeletons.is_new) {
-                    cout << skeletons.body_list.size() << " Person(s) detected\n\n";
-                    if (!skeletons.body_list.empty()) {
-
-                        auto first_skeleton = skeletons.body_list.front();
-
-                        cout << "First Person attributes :\n";
-                        cout << " Confidence (" << first_skeleton.confidence << "/100)\n";
-
-                        if (body_tracking_parameters.enable_tracking)
-                            cout << " Tracking ID: " << first_skeleton.id << " tracking state: " <<
-                                first_skeleton.tracking_state << " / " << first_skeleton.action_state << "\n";
-
-                        cout << " 3D position: " << first_skeleton.position <<
-                                " Velocity: " << first_skeleton.velocity << "\n";
-
-                        cout << " 3D dimensions: " << first_skeleton.dimensions << "\n";
-
-                        cout << " Keypoints 2D \n";
-                        // The body part meaning can be obtained by casting the index into a BODY_PARTS
-                        // to get the BODY_PARTS index the getIdx function is available
-                        for (int i = 0; i < first_skeleton.keypoint_2d.size(); i++) {
-                            auto &kp = first_skeleton.keypoint_2d[i];
-                            cout << "    " << i << " " << kp.x << ", " << kp.y << "\n";
-                        }
-
-                        // The BODY_PARTS can be link as bones, using sl::BODY_BONES which gives the BODY_PARTS pair for each
-                        cout << " Keypoints 3D \n";
-                        for (int i = 0; i < first_skeleton.keypoint.size(); i++) {
-                            auto &kp = first_skeleton.keypoint[i];
-                            cout << "    " <<  i << " " << kp.x << ", " << kp.y << ", " << kp.z << "\n";
-                        }
-
-                        cout << "\nPress 'Enter' to continue...\n";
-                        cin.ignore();
-                    }
-                    nb_detection++;
-                }
-            }
-        }*/
         //loops through all detected bodies
         for (int i = 0; i < skeletons.body_list.size(); i++) {
                 //retrieves information on detected body
                 sl::BodyData body = skeletons.body_list[i];
                 zed.retrieveBodies(skeletons, body_tracking_parameters_rt);
                 
-
-
                 unsigned int body_id = body.id; // Get the body id
 
                 //if person is too close publish bools to change robot speed.
@@ -321,7 +219,6 @@ int main(int argc, char **argv) {
                     bool_msg.data=true;
                     stop_obj_pub.publish(bool_msg);
                    
-
                 }
 
                 /*if (body.position.z <=3 ){ //within 3m slow
@@ -329,14 +226,20 @@ int main(int argc, char **argv) {
                     bool_msg.data=true;
                     slow_obj_pub.publish(bool_msg);
                 }
-                if (body.position.z >1 ) {
+                if (body.position.z >1 ) { //sets stop message to false when further than 1m
                     std_msgs::Bool bool_msg;
                     bool_msg.data=false;
                     stop_obj_pub.publish(bool_msg);
+                }
+                if (body.position.z >3 ) { // sets slow message to false when further then 3m
+                    std_msgs::Bool bool_msg;
+                    bool_msg.data=false;
+                    slow_obj_pub.publish(bool_msg);
                 }*/
                 
         }
-        //sets output msg to false 
+        //sets output msg to false -- whenever leaves loop its set to false
+        //so ends up even when true sending a true then false so needs changed
         std_msgs::Bool bool_msg;
         bool_msg.data=false;
         stop_obj_pub.publish(bool_msg);
@@ -353,7 +256,6 @@ int main(int argc, char **argv) {
         q.setRPY(cam_w_pose.getOrientation().ox, cam_w_pose.getOrientation().oy, cam_w_pose.getOrientation().oz);
         odom_trans.setRotation(q);
         odom_broadcaster.sendTransform(tf::StampedTransform(odom_trans, ros::Time::now(), "odom", "base_link"));
-
 
         //Calculate position and orientations
         nav_msgs::Odometry odom_msg;
@@ -375,7 +277,7 @@ int main(int argc, char **argv) {
         odom_msg.twist.twist.angular.z = sensors_data.imu.angular_velocity.z;
 
         odom_pub.publish(odom_msg);
-    
+
     #if ENABLE_GUI
             gl_viewer_available &&
     #endif
