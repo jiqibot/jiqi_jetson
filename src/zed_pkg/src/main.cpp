@@ -42,7 +42,7 @@
 #include <opencv2/highgui.hpp>
 
 // Flag to disable the GUI when using on jetson
-#define ENABLE_GUI 1
+#define ENABLE_GUI 0
 
 // ZED includes
 #include <sl/Camera.hpp>
@@ -85,6 +85,11 @@ int main(int argc, char **argv) {
     ros::Publisher right_pub = n.advertise<sensor_msgs::Image>("zed_right_image", 1);
     ros::Publisher stereo_pub = n.advertise<sensor_msgs::Image>("zed_stereo_image", 1);
     ros::Publisher odom_pub = n.advertise<nav_msgs::Odometry>("odom", 50);
+
+    //sets stop/slow msg to false to begin with
+    std_msgs::Bool bool_msg;
+    bool_msg.data=false;
+    stop_obj_pub.publish(bool_msg);
 
     // Create ZED objects
     Camera zed;
@@ -225,12 +230,13 @@ int main(int argc, char **argv) {
                     std_msgs::Bool bool_msg;
                     bool_msg.data=true;
                     slow_obj_pub.publish(bool_msg);
-                }
+                }*/
                 if (body.position.z >1 ) { //sets stop message to false when further than 1m
                     std_msgs::Bool bool_msg;
                     bool_msg.data=false;
                     stop_obj_pub.publish(bool_msg);
                 }
+                /*
                 if (body.position.z >3 ) { // sets slow message to false when further then 3m
                     std_msgs::Bool bool_msg;
                     bool_msg.data=false;
@@ -238,11 +244,7 @@ int main(int argc, char **argv) {
                 }*/
                 
         }
-        //sets output msg to false -- whenever leaves loop its set to false
-        //so ends up even when true sending a true then false so needs changed
-        std_msgs::Bool bool_msg;
-        bool_msg.data=false;
-        stop_obj_pub.publish(bool_msg);
+        
     
         // gets required information for odom
         zed.getPosition(cam_w_pose, sl::REFERENCE_FRAME::WORLD);
