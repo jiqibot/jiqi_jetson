@@ -75,6 +75,7 @@ int main(int argc, char **argv) {
     ros::NodeHandle n;
     ROS_INFO("NODE INITIALISED"); //Initialise node
 
+
     //Initialise publishers
     ros::Publisher point_cloud_pub = n.advertise<sensor_msgs::PointCloud2>("point_cloud", 1); //Point cloud publisher
     ros::Publisher bbox_pub = n.advertise<visualization_msgs::MarkerArray>("object_bounding_boxes", 1); //Object Bounding Box Publisher, visualisation purposes only
@@ -85,6 +86,10 @@ int main(int argc, char **argv) {
     ros::Publisher right_pub = n.advertise<sensor_msgs::Image>("zed_right_image", 1);
     ros::Publisher stereo_pub = n.advertise<sensor_msgs::Image>("zed_stereo_image", 1);
     ros::Publisher odom_pub = n.advertise<nav_msgs::Odometry>("odom", 50);
+
+    //set publisher to false to initialise
+    //stop_obj_pub.publish(false);
+    //slow_obj_pub.publish(false);
 
     // Create ZED objects
     Camera zed;
@@ -212,37 +217,41 @@ int main(int argc, char **argv) {
                 zed.retrieveBodies(skeletons, body_tracking_parameters_rt);
                 
                 unsigned int body_id = body.id; // Get the body id
+                //cout << "Person x position = " << body.position.x << endl;
+                //cout << "Person y position = " << body.position.y << endl;  
+                //cout << "Person z position = " << body.position.z << endl;
 
                 //if person is too close publish bools to change robot speed.
-                if (body.position.z <1 ){ // within 1m stop
+                if (body.position.z >-1000 ){ // within 1m stop
                     std_msgs::Bool bool_msg;
                     bool_msg.data=true;
                     stop_obj_pub.publish(bool_msg);
                    
                 }
 
-                /*if (body.position.z <=3 ){ //within 3m slow
+                if (body.position.z >-3000 ){ //within 3m slow
                     std_msgs::Bool bool_msg;
                     bool_msg.data=true;
                     slow_obj_pub.publish(bool_msg);
                 }
-                if (body.position.z >1 ) { //sets stop message to false when further than 1m
+                if (body.position.z <-1000 ) { //sets stop message to false when further than 1m
                     std_msgs::Bool bool_msg;
                     bool_msg.data=false;
                     stop_obj_pub.publish(bool_msg);
                 }
-                if (body.position.z >3 ) { // sets slow message to false when further then 3m
+                
+                if (body.position.z <-3000 ) { // sets slow message to false when further then 3m
                     std_msgs::Bool bool_msg;
                     bool_msg.data=false;
                     slow_obj_pub.publish(bool_msg);
-                }*/
+                }
                 
         }
         //sets output msg to false -- whenever leaves loop its set to false
         //so ends up even when true sending a true then false so needs changed
-        std_msgs::Bool bool_msg;
+        /*std_msgs::Bool bool_msg;
         bool_msg.data=false;
-        stop_obj_pub.publish(bool_msg);
+        stop_obj_pub.publish(bool_msg);*/
     
         // gets required information for odom
         zed.getPosition(cam_w_pose, sl::REFERENCE_FRAME::WORLD);
