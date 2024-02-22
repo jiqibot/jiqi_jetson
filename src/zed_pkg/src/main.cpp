@@ -42,7 +42,7 @@
 #include <opencv2/highgui.hpp>
 
 // Flag to disable the GUI when using on jetson
-#define ENABLE_GUI 1
+#define ENABLE_GUI 0
 
 // ZED includes
 #include <sl/Camera.hpp>
@@ -167,7 +167,7 @@ int main(int argc, char **argv) {
 
     bool gl_viewer_available = true;
     cout << setprecision(3);
-
+//GUI
 #if ENABLE_GUI
 
     float image_aspect_ratio = camera_config.resolution.width / (1.f * camera_config.resolution.height);
@@ -207,9 +207,20 @@ int main(int argc, char **argv) {
     GLViewer viewer;
     viewer.init(argc, argv, camera_parameters, body_tracking_parameters.enable_tracking);
 #endif
+
     //loop containing information to be published and updated in real time
     while (true) {
         
+        // outputs number of people in view for testing purpose
+        //cout << "No. Persons = " << skeletons.body_list.size() << endl;
+        
+        //sets slow and stop message to flase when no persons in view
+        if (skeletons.body_list.size() == 0){
+            std_msgs::Bool bool_msg;
+            bool_msg.data=false;
+            stop_obj_pub.publish(bool_msg);
+            slow_obj_pub.publish(bool_msg);
+        }
         //loops through all detected bodies
         for (int i = 0; i < skeletons.body_list.size(); i++) {
                 //retrieves information on detected body
@@ -217,6 +228,8 @@ int main(int argc, char **argv) {
                 zed.retrieveBodies(skeletons, body_tracking_parameters_rt);
                 
                 unsigned int body_id = body.id; // Get the body id
+
+                //displays the xyz value of person in view - for calibrate/testing
                 //cout << "Person x position = " << body.position.x << endl;
                 //cout << "Person y position = " << body.position.y << endl;  
                 //cout << "Person z position = " << body.position.z << endl;
@@ -226,7 +239,12 @@ int main(int argc, char **argv) {
                     std_msgs::Bool bool_msg;
                     bool_msg.data=true;
                     stop_obj_pub.publish(bool_msg);
-                   
+                }
+                
+                else if (body.position.z <-1000 ) { //sets stop message to false when further than 1m
+                    std_msgs::Bool bool_msg;
+                    bool_msg.data=false;
+                    stop_obj_pub.publish(bool_msg);
                 }
 
                 if (body.position.z >-3000 ){ //within 3m slow
@@ -234,24 +252,14 @@ int main(int argc, char **argv) {
                     bool_msg.data=true;
                     slow_obj_pub.publish(bool_msg);
                 }
-                if (body.position.z <-1000 ) { //sets stop message to false when further than 1m
-                    std_msgs::Bool bool_msg;
-                    bool_msg.data=false;
-                    stop_obj_pub.publish(bool_msg);
-                }
                 
-                if (body.position.z <-3000 ) { // sets slow message to false when further then 3m
+                else if (body.position.z <-3000 ) { // sets slow message to false when further then 3m
                     std_msgs::Bool bool_msg;
                     bool_msg.data=false;
                     slow_obj_pub.publish(bool_msg);
                 }
                 
         }
-        //sets output msg to false -- whenever leaves loop its set to false
-        //so ends up even when true sending a true then false so needs changed
-        /*std_msgs::Bool bool_msg;
-        bool_msg.data=false;
-        stop_obj_pub.publish(bool_msg);*/
     
         // gets required information for odom
         zed.getPosition(cam_w_pose, sl::REFERENCE_FRAME::WORLD);
@@ -287,6 +295,7 @@ int main(int argc, char **argv) {
 
         odom_pub.publish(odom_msg);
 
+    //GUI 
     #if ENABLE_GUI
             gl_viewer_available &&
     #endif
@@ -319,7 +328,7 @@ int main(int argc, char **argv) {
             if (is_playback && zed.getSVOPosition() == zed.getSVONumberOfFrames())
                 quit = true;
         }        
-
+    //GUI
     #if ENABLE_GUI
         gl_viewer_available = viewer.isAvailable();
         // as image_left_ocv and image_track_ocv are both ref of global_image, no need to update it
@@ -338,17 +347,19 @@ int main(int argc, char **argv) {
 
     }
 
-   
+//GUI   
 #if ENABLE_GUI
     viewer.exit();
     point_cloud.free();
     image_left.free();
 #endif
+    //Close
     zed.disableObjectDetection();
     zed.close();
     return EXIT_SUCCESS;
 }
 
+//Errors function
 void print(string msg_prefix, ERROR_CODE err_code, string msg_suffix) {
     cout << "[Sample] ";
     if (err_code != ERROR_CODE::SUCCESS)
@@ -363,6 +374,7 @@ void print(string msg_prefix, ERROR_CODE err_code, string msg_suffix) {
     cout << endl;
 }
 
+//ParseArgs function
 void parseArgs(int argc, char **argv, InitParameters& param) {
     if (argc > 1 && string(argv[1]).find(".svo") != string::npos) {
         // SVO input mode
