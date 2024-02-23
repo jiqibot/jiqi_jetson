@@ -239,7 +239,7 @@ int main(int argc, char **argv) {
                 }
                 
         }
-        
+        /*
         // If no person is found within the specified range, reset the flags to false
         if (!within1m) {
             std_msgs::Bool false_msg;
@@ -251,7 +251,7 @@ int main(int argc, char **argv) {
             std_msgs::Bool false_msg;
             false_msg.data = false;
             slow_obj_pub.publish(false_msg);
-        }
+        }*/
         // Publish the appropriate messages based on the flags
         std_msgs::Bool stop_msg;
         stop_msg.data = within1m;
