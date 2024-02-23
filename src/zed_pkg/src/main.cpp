@@ -56,6 +56,7 @@
 // Using std and sl namespaces
 using namespace std;
 using namespace sl;
+
 bool is_playback = false;
 void print(string msg_prefix, ERROR_CODE err_code = ERROR_CODE::SUCCESS, string msg_suffix = "");
 void parseArgs(int argc, char **argv, InitParameters& param);
@@ -87,9 +88,6 @@ int main(int argc, char **argv) {
     ros::Publisher stereo_pub = n.advertise<sensor_msgs::Image>("zed_stereo_image", 1);
     ros::Publisher odom_pub = n.advertise<nav_msgs::Odometry>("odom", 50);
 
-    //set publisher to false to initialise
-    //stop_obj_pub.publish(false);
-    //slow_obj_pub.publish(false);
 
     // Create ZED objects
     Camera zed;
@@ -97,7 +95,7 @@ int main(int argc, char **argv) {
     init_parameters.depth_mode = DEPTH_MODE::ULTRA;
     //init_parameters.coordinate_units = sl::UNIT::METER; 
     init_parameters.depth_maximum_distance = 10.0f * 1000.0f;
-    init_parameters.coordinate_system = COORDINATE_SYSTEM::RIGHT_HANDED_Y_UP; // OpenGL's coordinate system is right_handed
+    init_parameters.coordinate_system = COORDINATE_SYSTEM::RIGHT_HANDED_Y_UP; // Rviz's coordinate system is right_handed (might have to be changed for Z up)
     init_parameters.sdk_verbose = 1;
 
     parseArgs(argc, argv, init_parameters);
@@ -207,20 +205,15 @@ int main(int argc, char **argv) {
     GLViewer viewer;
     viewer.init(argc, argv, camera_parameters, body_tracking_parameters.enable_tracking);
 #endif
-
+    
     //loop containing information to be published and updated in real time
     while (true) {
-        
+        //creates boolean message for stopping and slowing and sets them to false at the start of every loop
+        bool within1m = false;
+        bool within2m = false;
         // outputs number of people in view for testing purpose
         //cout << "No. Persons = " << skeletons.body_list.size() << endl;
         
-        //sets slow and stop message to flase when no persons in view
-        if (skeletons.body_list.size() == 0){
-            std_msgs::Bool bool_msg;
-            bool_msg.data=false;
-            stop_obj_pub.publish(bool_msg);
-            slow_obj_pub.publish(bool_msg);
-        }
         //loops through all detected bodies
         for (int i = 0; i < skeletons.body_list.size(); i++) {
                 //retrieves information on detected body
@@ -234,33 +227,41 @@ int main(int argc, char **argv) {
                 //cout << "Person y position = " << body.position.y << endl;  
                 //cout << "Person z position = " << body.position.z << endl;
 
-                //if person is too close publish bools to change robot speed.
+                //if person is too close update bools to change speed.
                 if (body.position.z >-1000 ){ // within 1m stop
-                    std_msgs::Bool bool_msg;
-                    bool_msg.data=true;
-                    stop_obj_pub.publish(bool_msg);
-                }
-                
-                else if (body.position.z <-1000 ) { //sets stop message to false when further than 1m
-                    std_msgs::Bool bool_msg;
-                    bool_msg.data=false;
-                    stop_obj_pub.publish(bool_msg);
-                }
 
-                if (body.position.z >-3000 ){ //within 3m slow
-                    std_msgs::Bool bool_msg;
-                    bool_msg.data=true;
-                    slow_obj_pub.publish(bool_msg);
+                    within1m = true;
+                    
                 }
-                
-                else if (body.position.z <-3000 ) { // sets slow message to false when further then 3m
-                    std_msgs::Bool bool_msg;
-                    bool_msg.data=false;
-                    slow_obj_pub.publish(bool_msg);
+                if (body.position.z >-2000 ){ //within 2m slow
+            
+                    within2m = true;
                 }
                 
         }
-    
+        
+        // If no person is found within the specified range, reset the flags to false
+        if (!within1m) {
+            std_msgs::Bool false_msg;
+            false_msg.data = false;
+            stop_obj_pub.publish(false_msg);
+        }
+
+        if (!within2m) {
+            std_msgs::Bool false_msg;
+            false_msg.data = false;
+            slow_obj_pub.publish(false_msg);
+        }
+        // Publish the appropriate messages based on the flags
+        std_msgs::Bool stop_msg;
+        stop_msg.data = within1m;
+        stop_obj_pub.publish(stop_msg);
+
+        std_msgs::Bool slow_msg;
+        slow_msg.data = within2m;
+        slow_obj_pub.publish(slow_msg);
+       
+
         // gets required information for odom
         zed.getPosition(cam_w_pose, sl::REFERENCE_FRAME::WORLD);
         zed.getSensorsData(sensors_data, sl::TIME_REFERENCE::CURRENT);
@@ -308,7 +309,7 @@ int main(int argc, char **argv) {
 
             body_tracking_parameters_rt.detection_confidence_threshold = body_detection_confidence;
             returned_state = zed.retrieveBodies(skeletons, body_tracking_parameters_rt, body_tracking_parameters.instance_module_id);
-                     
+        //GUI             
         #if ENABLE_GUI
             zed.retrieveImage(image_left, VIEW::LEFT, MEM::CPU, display_resolution);
             zed.retrieveMeasure(point_cloud, MEASURE::XYZRGBA, MEM::GPU, pc_resolution);
@@ -361,7 +362,7 @@ int main(int argc, char **argv) {
 
 //Errors function
 void print(string msg_prefix, ERROR_CODE err_code, string msg_suffix) {
-    cout << "[Sample] ";
+    cout << "";
     if (err_code != ERROR_CODE::SUCCESS)
         cout << "[Error] ";
     cout << msg_prefix << " ";
@@ -380,7 +381,7 @@ void parseArgs(int argc, char **argv, InitParameters& param) {
         // SVO input mode
         param.input.setFromSVOFile(argv[1]);
         is_playback = true;
-        cout << "[Sample] Using SVO File input: " << argv[1] << endl;
+        cout << "Using SVO File input: " << argv[1] << endl;
     } else if (argc > 1 && string(argv[1]).find(".svo") == string::npos) {
         string arg = string(argv[1]);
         unsigned int a, b, c, d, port;
@@ -388,29 +389,29 @@ void parseArgs(int argc, char **argv, InitParameters& param) {
             // Stream input mode - IP + port
             string ip_adress = to_string(a) + "." + to_string(b) + "." + to_string(c) + "." + to_string(d);
             param.input.setFromStream(sl::String(ip_adress.c_str()), port);
-            cout << "[Sample] Using Stream input, IP : " << ip_adress << ", port : " << port << endl;
+            cout << "Using Stream input, IP : " << ip_adress << ", port : " << port << endl;
         } else if (sscanf(arg.c_str(), "%u.%u.%u.%u", &a, &b, &c, &d) == 4) {
             // Stream input mode - IP only
             param.input.setFromStream(sl::String(argv[1]));
-            cout << "[Sample] Using Stream input, IP : " << argv[1] << endl;
+            cout << "Using Stream input, IP : " << argv[1] << endl;
         } else if (arg.find("HD2K") != string::npos) {
             param.camera_resolution = RESOLUTION::HD2K;
-            cout << "[Sample] Using Camera in resolution HD2K" << endl;
+            cout << "Using Camera in resolution HD2K" << endl;
         } else if (arg.find("HD1200") != string::npos) {
             param.camera_resolution = RESOLUTION::HD1080;
-            cout << "[Sample] Using Camera in resolution HD1200" << endl;
+            cout << "Using Camera in resolution HD1200" << endl;
         } else if (arg.find("HD1080") != string::npos) {
             param.camera_resolution = RESOLUTION::HD1080;
-            cout << "[Sample] Using Camera in resolution HD1080" << endl;
+            cout << "Using Camera in resolution HD1080" << endl;
         } else if (arg.find("HD720") != string::npos) {
             param.camera_resolution = RESOLUTION::HD720;
-            cout << "[Sample] Using Camera in resolution HD720" << endl;
+            cout << "Using Camera in resolution HD720" << endl;
         } else if (arg.find("SVGA") != string::npos) {
             param.camera_resolution = RESOLUTION::SVGA;
-            cout << "[Sample] Using Camera in resolution SVGA" << endl;
+            cout << "Using Camera in resolution SVGA" << endl;
         } else if (arg.find("VGA") != string::npos) {
             param.camera_resolution = RESOLUTION::VGA;
-            cout << "[Sample] Using Camera in resolution VGA" << endl;
+            cout << "Using Camera in resolution VGA" << endl;
         }
     }
 }
