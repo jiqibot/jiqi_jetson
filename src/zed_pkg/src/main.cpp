@@ -208,6 +208,10 @@ int main(int argc, char **argv) {
     
     //loop containing information to be published and updated in real time
     while (true) {
+        if (zed.grab() == sl::ERROR_CODE::SUCCESS) { //if camera succesfully initialises
+        
+
+
         //creates boolean message for stopping and slowing and sets them to false at the start of every loop
         bool within1m = false;
         bool within2m = false;
@@ -239,19 +243,7 @@ int main(int argc, char **argv) {
                 }
                 
         }
-        /*
-        // If no person is found within the specified range, reset the flags to false
-        if (!within1m) {
-            std_msgs::Bool false_msg;
-            false_msg.data = false;
-            stop_obj_pub.publish(false_msg);
-        }
-
-        if (!within2m) {
-            std_msgs::Bool false_msg;
-            false_msg.data = false;
-            slow_obj_pub.publish(false_msg);
-        }*/
+        
         // Publish the appropriate messages based on the flags
         std_msgs::Bool stop_msg;
         stop_msg.data = within1m;
@@ -261,7 +253,7 @@ int main(int argc, char **argv) {
         slow_msg.data = within2m;
         slow_obj_pub.publish(slow_msg);
        
-
+       
         // gets required information for odom
         zed.getPosition(cam_w_pose, sl::REFERENCE_FRAME::WORLD);
         zed.getSensorsData(sensors_data, sl::TIME_REFERENCE::CURRENT);
@@ -295,6 +287,8 @@ int main(int argc, char **argv) {
         odom_msg.twist.twist.angular.z = sensors_data.imu.angular_velocity.z;
 
         odom_pub.publish(odom_msg);
+
+    }
 
     //GUI 
     #if ENABLE_GUI
