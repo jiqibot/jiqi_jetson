@@ -247,7 +247,7 @@ int main(int argc, char **argv) {
                 
         }*/
 
-        zed.retrieveObjects(objects, detection_parameters_rt);
+        //zed.retrieveObjects(objects, detection_parameters_rt);
         // Loop through all detected objects
             for (int i = 0; i < objects.object_list.size(); i++) {
                 
