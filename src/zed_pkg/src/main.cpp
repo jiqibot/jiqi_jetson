@@ -252,18 +252,22 @@ int main(int argc, char **argv) {
             for (int i = 0; i < objects.object_list.size(); i++) {
                 
                 sl::ObjectData object = objects.object_list[i];
-                if (object.label == sl::OBJECT_CLASS::PERSON){
+                //if (object.label == sl::OBJECT_CLASS::PERSON){
+                //    cout << "Person x position = " << object.position.x << endl;
+                //    cout << "Person y position = " << object.position.y << endl;  
+                //    cout << "Person z position = " << object.position.z << endl; 
+                //}
                 //if person is too close publish bools to change robot speed.
-                if (object.position.x >-1000 ){ //object_label ==1 ==person
+                if (object.position.z >-1000 && object.label == sl::OBJECT_CLASS::PERSON){ //object_label ==1 ==person
 
                     within1m = true;
                 }
 
-                if (object.position.x >-2000 ){ //add and if object class = person
+                if (object.position.z >-2000 && object.label == sl::OBJECT_CLASS::PERSON){ //add and if object class = person
 
                     within2m = true;
                 }
-            }
+            
             }
         // Publish the appropriate messages based on the flags
         std_msgs::Bool stop_msg;
