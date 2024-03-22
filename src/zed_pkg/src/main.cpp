@@ -92,7 +92,9 @@ int main(int argc, char **argv) {
     // Create ZED objects
     Camera zed;
     InitParameters init_parameters;
-    init_parameters.depth_mode = DEPTH_MODE::ULTRA;
+    init_parameters.depth_mode = DEPTH_MODE::PERFORMANCE;
+    init_parameters.camera_resolution = RESOLUTION::HD720;
+    init_parameters.camera_fps = 60;
     //init_parameters.coordinate_units = sl::UNIT::METER; 
     init_parameters.depth_maximum_distance = 10.0f * 1000.0f;
     init_parameters.coordinate_system = COORDINATE_SYSTEM::RIGHT_HANDED_Y_UP; // Rviz's coordinate system is right_handed (might have to be changed for Z up)
