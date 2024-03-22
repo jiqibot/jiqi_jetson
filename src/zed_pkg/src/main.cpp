@@ -148,13 +148,13 @@ int main(int argc, char **argv) {
 
     // Detection runtime parameters for bodies
     // default detection threshold, apply to all object class
-    int body_detection_confidence = 60;
+    int body_detection_confidence = 20;
     BodyTrackingRuntimeParameters body_tracking_parameters_rt(body_detection_confidence);
 
     // Detection output
     bool quit = false;
     RuntimeParameters runtime_parameters;
-    runtime_parameters.confidence_threshold = 50;
+    runtime_parameters.confidence_threshold = 20;
     Pose cam_w_pose;
     cam_w_pose.pose_data.setIdentity();
     Objects objects;
@@ -218,6 +218,7 @@ int main(int argc, char **argv) {
         // outputs number of people in view for testing purpose
         //cout << "No. Persons = " << skeletons.body_list.size() << endl;
         
+        /*
         //loops through all detected bodies
         for (int i = 0; i < skeletons.body_list.size(); i++) {
                 //retrieves information on detected body
@@ -242,8 +243,26 @@ int main(int argc, char **argv) {
                     within2m = true;
                 }
                 
-        }
-        
+        }*/
+
+        zed.retrieveObjects(objects, detection_parameters_rt);
+        // Loop through all detected objects
+            for (int i = 0; i < objects.object_list.size(); i++) {
+                
+                sl::ObjectData object = objects.object_list[i];
+                if (object.label == sl::OBJECT_CLASS::PERSON){
+                //if person is too close publish bools to change robot speed.
+                if (object.position.x >-1000 ){ //object_label ==1 ==person
+
+                    within1m = true;
+                }
+
+                if (object.position.x >-2000 ){ //add and if object class = person
+
+                    within2m = true;
+                }
+            }
+            }
         // Publish the appropriate messages based on the flags
         std_msgs::Bool stop_msg;
         stop_msg.data = within1m;
@@ -253,11 +272,30 @@ int main(int argc, char **argv) {
         slow_msg.data = within2m;
         slow_obj_pub.publish(slow_msg);
        
+        sl::Mat point_cloud;
+        zed.retrieveMeasure(point_cloud, sl::MEASURE::XYZRGBA);
+
+        //converting ZED point cloud to ROS sensor_msgs::PointCloud2
+        sensor_msgs::PointCloud2 ros_point_cloud;
+        ros_point_cloud.header.stamp = ros::Time::now();
+        ros_point_cloud.header.frame_id = "zed_camera_frame"; //set desired frame id
+        ros_point_cloud.height = point_cloud.getHeight();
+        ros_point_cloud.width = point_cloud.getWidth();
+        ros_point_cloud.is_dense = false;
+        ros_point_cloud.is_bigendian = false;
+        ros_point_cloud.point_step = sizeof(float) * 4;
+        ros_point_cloud.row_step = ros_point_cloud.point_step * ros_point_cloud.width;
+        ros_point_cloud.data.resize(ros_point_cloud.height * ros_point_cloud.row_step);
+
+        //copy data
+        memcpy(&ros_point_cloud.data[0], point_cloud.getPtr<sl::float4>(), ros_point_cloud.data.size());
+        //publish point cloud
+        point_cloud_pub.publish(ros_point_cloud);
        
         // gets required information for odom
         zed.getPosition(cam_w_pose, sl::REFERENCE_FRAME::WORLD);
         zed.getSensorsData(sensors_data, sl::TIME_REFERENCE::CURRENT);
-
+        /*
         //Broadcast odom -> base_link TF
         static tf::TransformBroadcaster odom_broadcaster;
         tf::Transform odom_trans;
@@ -266,7 +304,7 @@ int main(int argc, char **argv) {
         q.setRPY(cam_w_pose.getOrientation().ox, cam_w_pose.getOrientation().oy, cam_w_pose.getOrientation().oz);
         odom_trans.setRotation(q);
         odom_broadcaster.sendTransform(tf::StampedTransform(odom_trans, ros::Time::now(), "odom", "base_link"));
-
+        
         //Calculate position and orientations
         nav_msgs::Odometry odom_msg;
         odom_msg.header.frame_id = "odom";
@@ -287,7 +325,7 @@ int main(int argc, char **argv) {
         odom_msg.twist.twist.angular.z = sensors_data.imu.angular_velocity.z;
 
         odom_pub.publish(odom_msg);
-
+*/
     }
 
     //GUI 
