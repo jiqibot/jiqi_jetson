@@ -145,7 +145,7 @@ int main(int argc, char **argv) {
     //read object class names from text file
     std::vector<std::string> class_names;
     {
-        std::ifstream class_file("/home/kai/codwip_ws/src/zed_pkg/coco.names.txt");
+        std::ifstream class_file("/home/jiqi/jiqi_jetson/src/zed_pkg/coco.names.txt");
         if (!class_file) {
             for (int i = 0; i < NUM_CLASSES; i++)
                 class_names.push_back(std::to_string(i));
@@ -218,7 +218,7 @@ int main(int argc, char **argv) {
     sl::Pose prev_pose;
     //initialise yolo model and weights
     // Weight can be downloaded from https://github.com/AlexeyAB/darknet/releases/download/darknet_yolo_v3_optimal/yolov4.weights
-    auto net = cv::dnn::readNetFromDarknet("/home/kai/codwip_ws/src/zed_pkg/yolov4.cfg", "/home/kai/codwip_ws/src/zed_pkg/yolov4.weights");
+    auto net = cv::dnn::readNetFromDarknet("/home/jiqi/jiqi_jetson/src/zed_pkg/yolov4.cfg", "/home/jiqi/jiqi_jetson/src/zed_pkg/yolov4.weights");
     net.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
     net.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
     // net.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
