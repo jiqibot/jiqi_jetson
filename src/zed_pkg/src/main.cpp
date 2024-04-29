@@ -1,3 +1,9 @@
+// Jiqi Robot ZED Cam 2 program
+// Lancaster University School of Engineering
+// This Program uses yolov4 object detection to send object data for use 
+// in robot navigation, additionally checks for people to 
+// send manual stop message whe too close and  publishes 
+// pointcloud and IMU data for use in navigation
 
 // includes
 #include "ros/ros.h"
@@ -75,8 +81,12 @@ struct TimestampHandler {
     inline bool isNew(SensorsData::IMUData& imu_data) {
         return isNew(imu_data.timestamp, ts_imu);
     }
+    // Specific function for MagnetometerData.
+    inline bool isNew(SensorsData::MagnetometerData& mag_data) {
+        return isNew(mag_data.timestamp, ts_mag);
+    }
 
-    Timestamp ts_imu = 0; // Initial values
+    Timestamp ts_imu = 0, ts_mag = 0; // Initial values
 };
 
 constexpr float CONFIDENCE_THRESHOLD = 0.4;
@@ -128,7 +138,6 @@ int main(int argc, char **argv) {
     ros::Publisher left_pub = n.advertise<sensor_msgs::Image>("zed_left_image", 1);
     ros::Publisher right_pub = n.advertise<sensor_msgs::Image>("zed_right_image", 1);
     ros::Publisher stereo_pub = n.advertise<sensor_msgs::Image>("zed_stereo_image", 1);
-    //ros::Publisher odom_pub = n.advertise<nav_msgs::Odometry>("odom", 50);
     ros::Publisher imu_pub =n.advertise<sensor_msgs::Imu>("imu_data",10);
     ros::Publisher magnetometer_pub = n.advertise<sensor_msgs::MagneticField>("/imu/magnetometer", 10);
 
@@ -153,8 +162,7 @@ int main(int argc, char **argv) {
     init_parameters.depth_mode = DEPTH_MODE::PERFORMANCE;
     init_parameters.camera_resolution = RESOLUTION::HD720;
     init_parameters.camera_fps = 30;
-    //init_parameters.coordinate_units = sl::UNIT::METER; 
-    init_parameters.depth_maximum_distance = 10.0f * 1000.0f;
+    init_parameters.coordinate_units = sl::UNIT::METER; 
     init_parameters.coordinate_system = COORDINATE_SYSTEM::RIGHT_HANDED_Z_UP; // Rviz's coordinate system is right_handed (might have to be changed for Z up)
     init_parameters.sdk_verbose = 1;
 
@@ -176,31 +184,12 @@ int main(int argc, char **argv) {
     PositionalTrackingParameters positional_tracking_parameters;
     zed.enablePositionalTracking(positional_tracking_parameters);
 
-    
-    //print("Skeleton Detection: Loading Module...");
-    // Define the body detection module parameters
-    BodyTrackingParameters body_tracking_parameters;
-    body_tracking_parameters.enable_tracking = true;
-    body_tracking_parameters.enable_segmentation = false; // set true should give person pixel mask
-    body_tracking_parameters.detection_model = BODY_TRACKING_MODEL::HUMAN_BODY_MEDIUM;
-    body_tracking_parameters.instance_module_id = 1; // select instance ID
-    // enabling body tracking for distance, velocity etc of person
-    returned_state = zed.enableBodyTracking(body_tracking_parameters);
-    if (returned_state != ERROR_CODE::SUCCESS) {
-        print("enableBodyTracking", returned_state, "\nExit program.");
-        zed.close();
-        return EXIT_FAILURE;
-    }
-    
-
     // Define the object detection module parameters - using staandard not custom detection
     ObjectDetectionParameters object_detection_parameters;
     object_detection_parameters.enable_tracking = true;
     object_detection_parameters.enable_segmentation = false; 
     object_detection_parameters.detection_model = OBJECT_DETECTION_MODEL::CUSTOM_BOX_OBJECTS;
-    //object_detection_parameters.instance_module_id = 1; // select instance ID
     // enabling object tracking
-    //print("Object Detection: Loading Module...");
     returned_state = zed.enableObjectDetection(object_detection_parameters);
     if (returned_state != ERROR_CODE::SUCCESS) {
         print("enableObjectDetection", returned_state, "\nExit program.");
@@ -211,15 +200,6 @@ int main(int argc, char **argv) {
     // Detection runtime parameters for objects
     int detection_confidence_od = 20;
     ObjectDetectionRuntimeParameters object_detection_parameters_rt(detection_confidence_od);
-
-    // Detection runtime parameters for bodies
-    // default detection threshold, apply to all object class
-    int body_detection_confidence = 20;
-    BodyTrackingRuntimeParameters body_tracking_parameters_rt(body_detection_confidence);
-
-    // Create OpenGL Viewer
-    //GLViewer viewer;
-    //viewer.init(argc, argv, camera_info.calibration_parameters.left_cam, true);
 
     // Detection output
     bool quit = false;
@@ -332,20 +312,15 @@ int main(int argc, char **argv) {
             // Send the custom detected boxes to the ZED
             zed.ingestCustomBoxObjects(objects_in);
 
-            cv::imshow("Objects", frame);
-            cv::waitKey(10);
+            //enable below for camera output to display
+            //cv::imshow("Objects", frame);
+            //cv::waitKey(10);
 
             // Retrieve the tracked objects, with 2D and 3D attributes
             zed.retrieveObjects(objects, object_detection_parameters_rt);
             zed.retrieveMeasure(point_cloud, sl::MEASURE::XYZBGRA, sl::MEM::CPU, pc_resolution);
             zed.retrieveImage(left_image, sl::VIEW::LEFT);
             zed.retrieveImage(right_image, sl::VIEW::RIGHT);
-
-             // GL Viewer
-            //zed.retrieveMeasure(point_cloud, sl::MEASURE::XYZRGBA, sl::MEM::GPU, pc_resolution);
-            //zed.getPosition(cam_w_pose, sl::REFERENCE_FRAME::WORLD);
-            //viewer.updateData(point_cloud, objects, skeletons, cam_w_pose.pose_data);
-
 
             //Publishers for all essential data
             ros::Time current_time = ros::Time::now();
@@ -399,11 +374,13 @@ int main(int argc, char **argv) {
             for (int i = 0; i < objects.object_list.size(); i++) {
 
                 sl::ObjectData object = objects.object_list[i];
-
+                //check object is a person
                 for (int c = 0; c < NUM_CLASSES; c++) {
                 for (size_t e = 0; e < indices[c].size(); ++e) {
                     auto idx = indices[c][e];
-                    
+
+                    //ensures object position is set to a float
+                    float objectdistance = object.position.y;
 
                     
                     sl::CustomBoxObjectData tmp;
@@ -418,12 +395,12 @@ int main(int argc, char **argv) {
                     //    cout << "Person z position = " << object.position.z << endl; 
                     //}
                 //if person is too close publish bools to change robot speed.
-                    if (object.position.y <1000 && tmp.is_grounded == (c == 0)){ //object_label ==1 ==person
+                    if (objectdistance <1 && tmp.is_grounded == (c == 0)){ //object_label ==1 ==person
 
                      within1m = true;
                     }
 
-                    if (object.position.y <2000 && tmp.is_grounded == (c == 0)){ //add and if object class = person
+                    if (objectdistance <2 && tmp.is_grounded == (c == 0)){ //add and if object class = person
 
                        within2m = true;
                     }
@@ -431,7 +408,6 @@ int main(int argc, char **argv) {
             }
                
             // Custom obstacles for teb_local_planner
-            
                 costmap_converter::ObstacleMsg polygon_obstacle;
                 polygon_obstacle.id=2; //polygon type obstacle
                 polygon_obstacle.polygon.points.resize(4);
@@ -445,15 +421,13 @@ int main(int argc, char **argv) {
                 polygon_obstacle.polygon.points[3].y= object.position.y + (object.dimensions[1]/2);
                 obstacle_msg.obstacles.push_back(polygon_obstacle);
 
-            if (visualise=true){ //can publish a markerArray for visualisation purposes in rviz, parameter set in launch file
+            if (visualise=true){ //marker array for rviz
                     bbox.header.frame_id = "map";
-                    //bbox.ns = "object_detection";
                     bbox.type = visualization_msgs::Marker::CUBE;
                     bbox.action = visualization_msgs::Marker::ADD;
                     bbox.color.r = 1.0;
                     bbox.color.a = 0.25;
-
-                    // Update marker message
+                    // Update publisher with object positions
                     bbox.id = i;
                     bbox.pose.position.x = object.position.x;
                     bbox.pose.position.y = object.position.y;
@@ -462,8 +436,7 @@ int main(int argc, char **argv) {
                     bbox.scale.y = object.dimensions[1];
                     bbox.scale.z = object.dimensions[2];
                     bbox.header.stamp = ros::Time::now();
-
-                    // Publish marker message
+                    // Publish marker
                     bbox_array.markers.push_back(bbox);
                 }
 
@@ -477,12 +450,11 @@ int main(int argc, char **argv) {
         slow_msg.data = within2m;
         slow_obj_pub.publish(slow_msg);
        
+        //publish obstacles and bounding boxes
         obs_pub.publish(obstacle_msg);
         bbox_pub.publish(bbox_array);
 
 
-
- //Sensor Data
     // Used to store sensors data.
     SensorsData sensors_data;
 
@@ -491,15 +463,11 @@ int main(int argc, char **argv) {
 
     // Retrieve sensors data 
     auto start_time = std::chrono::high_resolution_clock::now();
-    //int count = 0;
-    //double elapse_time = 0;
 
         if (zed.getSensorsData(sensors_data, TIME_REFERENCE::CURRENT) == ERROR_CODE::SUCCESS) {
 
-            // Check if a new IMU sample is available.
             if (ts.isNew(sensors_data.imu)) {
-                //cout << "Sample " << count++ << "\n";
-                //cout << " - IMU:\n";
+                //IMU Data being assigned to ros publisher
                 //cout << " \t Orientation: {" << sensors_data.imu.pose.getOrientation() << "}\n";
                 //cout << " \t Acceleration: {" << sensors_data.imu.linear_acceleration << "} [m/sec^2]\n";
                 //cout << " \t Angular Velocitiy: {" << sensors_data.imu.angular_velocity << "} [deg/sec]\n";
@@ -514,25 +482,21 @@ int main(int argc, char **argv) {
                 imu_msg.linear_acceleration.x = sensors_data.imu.linear_acceleration.x;
                 imu_msg.linear_acceleration.y = sensors_data.imu.linear_acceleration.y;
                 imu_msg.linear_acceleration.z = sensors_data.imu.linear_acceleration.z;
-                
+                //Publish IMU
                 imu_pub.publish(imu_msg);
 
+                //magnetometer data being assigned to ros publisher
                 //cout << " - Magnetometer\n \t Magnetic Field: {" << sensors_data.magnetometer.magnetic_field_calibrated << "} [uT]\n";
                 magnetometer_msg.header.stamp = ros::Time::now();
                 magnetometer_msg.header.frame_id = "base_link";
                 magnetometer_msg.magnetic_field.x = sensors_data.magnetometer.magnetic_field_calibrated.x;
                 magnetometer_msg.magnetic_field.y = sensors_data.magnetometer.magnetic_field_calibrated.y;
                 magnetometer_msg.magnetic_field.z = sensors_data.magnetometer.magnetic_field_calibrated.z;
-
+                //publish magnetometer
                 magnetometer_pub.publish(magnetometer_msg);
         }
-        // Compute the elapsed time since the beginning of the main loop.
-        //elapse_time = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - start_time).count();
         }
-     
-   //end sensor data
 
-   
         
     }
     }
