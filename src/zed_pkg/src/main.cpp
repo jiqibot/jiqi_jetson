@@ -7,6 +7,8 @@
 #include <sensor_msgs/image_encodings.h>
 #include <sensor_msgs/Image.h>
 #include <sensor_msgs/point_cloud2_iterator.h>
+#include <sensor_msgs/Imu.h>
+#include <sensor_msgs/MagneticField.h>
 #include <visualization_msgs/Marker.h>
 #include <visualization_msgs/MarkerArray.h>
 #include <geometry_msgs/PoseStamped.h>
@@ -41,17 +43,15 @@
 #include <opencv2/imgproc.hpp>
 #include <opencv2/highgui.hpp>
 
-// Flag to disable the GUI when using on jetson
-#define ENABLE_GUI 0
 
 // ZED includes
 #include <sl/Camera.hpp>
 #include "utils.hpp"
 // other code includes (for GUI)
-#if ENABLE_GUI
+
 #include "GLViewer.hpp"
 #include "TrackingViewer.hpp"
-#endif
+
 
 // Using std and sl namespaces
 using namespace std;
@@ -61,6 +61,48 @@ bool is_playback = false;
 void print(string msg_prefix, ERROR_CODE err_code = ERROR_CODE::SUCCESS, string msg_suffix = "");
 void parseArgs(int argc, char **argv, InitParameters& param);
 
+
+// Basic structure to compare timestamps of a sensor. Determines if a specific sensor data has been updated or not.
+struct TimestampHandler {
+
+    // Compare the new timestamp to the last valid one. If it is higher, save it as new reference.
+    inline bool isNew(Timestamp& ts_curr, Timestamp& ts_ref) {
+        bool new_ = ts_curr > ts_ref;
+        if (new_) ts_ref = ts_curr;
+        return new_;
+    }
+    // Specific function for IMUData.
+    inline bool isNew(SensorsData::IMUData& imu_data) {
+        return isNew(imu_data.timestamp, ts_imu);
+    }
+
+    Timestamp ts_imu = 0; // Initial values
+};
+
+constexpr float CONFIDENCE_THRESHOLD = 0.4;
+constexpr float NMS_THRESHOLD = 0.4;
+constexpr int NUM_CLASSES = 80;
+constexpr int INFERENCE_SIZE = 416;
+
+// colors for bounding boxes
+const cv::Scalar colors[] = {
+    {0, 255, 255},
+    {255, 255, 0},
+    {0, 255, 0},
+    {255, 0, 0}
+};
+const auto NUM_COLORS = sizeof (colors) / sizeof (colors[0]);
+
+
+//convert opencv rectangle to zed bounding box
+std::vector<sl::uint2> cvt(const cv::Rect &bbox_in){
+    std::vector<sl::uint2> bbox_out(4);
+    bbox_out[0] = sl::uint2(bbox_in.x, bbox_in.y);
+    bbox_out[1] = sl::uint2(bbox_in.x + bbox_in.width, bbox_in.y);
+    bbox_out[2] = sl::uint2(bbox_in.x + bbox_in.width, bbox_in.y + bbox_in.height);
+    bbox_out[3] = sl::uint2(bbox_in.x, bbox_in.y + bbox_in.height);
+    return bbox_out;
+}
 // main code
 int main(int argc, char **argv) {
 
@@ -70,7 +112,7 @@ int main(int argc, char **argv) {
         const bool isJetson = false;
     #endif
 
-    bool visualise = false;
+    bool visualise = true;
 
     ros::init(argc, argv, "zed2Cam");
     ros::NodeHandle n;
@@ -86,18 +128,34 @@ int main(int argc, char **argv) {
     ros::Publisher left_pub = n.advertise<sensor_msgs::Image>("zed_left_image", 1);
     ros::Publisher right_pub = n.advertise<sensor_msgs::Image>("zed_right_image", 1);
     ros::Publisher stereo_pub = n.advertise<sensor_msgs::Image>("zed_stereo_image", 1);
-    ros::Publisher odom_pub = n.advertise<nav_msgs::Odometry>("odom", 50);
+    //ros::Publisher odom_pub = n.advertise<nav_msgs::Odometry>("odom", 50);
+    ros::Publisher imu_pub =n.advertise<sensor_msgs::Imu>("imu_data",10);
+    ros::Publisher magnetometer_pub = n.advertise<sensor_msgs::MagneticField>("/imu/magnetometer", 10);
 
+
+    //read object class names from text file
+    std::vector<std::string> class_names;
+    {
+        std::ifstream class_file("/home/kai/codwip_ws/src/zed_pkg/coco.names.txt");
+        if (!class_file) {
+            for (int i = 0; i < NUM_CLASSES; i++)
+                class_names.push_back(std::to_string(i));
+        } else {
+            std::string line;
+            while (std::getline(class_file, line))
+                class_names.push_back(line);
+        }
+    }
 
     // Create ZED objects
     Camera zed;
     InitParameters init_parameters;
     init_parameters.depth_mode = DEPTH_MODE::PERFORMANCE;
     init_parameters.camera_resolution = RESOLUTION::HD720;
-    init_parameters.camera_fps = 60;
+    init_parameters.camera_fps = 30;
     //init_parameters.coordinate_units = sl::UNIT::METER; 
     init_parameters.depth_maximum_distance = 10.0f * 1000.0f;
-    init_parameters.coordinate_system = COORDINATE_SYSTEM::RIGHT_HANDED_Y_UP; // Rviz's coordinate system is right_handed (might have to be changed for Z up)
+    init_parameters.coordinate_system = COORDINATE_SYSTEM::RIGHT_HANDED_Z_UP; // Rviz's coordinate system is right_handed (might have to be changed for Z up)
     init_parameters.sdk_verbose = 1;
 
     parseArgs(argc, argv, init_parameters);
@@ -111,16 +169,21 @@ int main(int argc, char **argv) {
 
     // enabling position tracking - prereq for body and object tracking 
     auto camera_config = zed.getCameraInformation().camera_configuration;
+
+    sl::Resolution pc_resolution(std::min((int) camera_config.resolution.width, 720), std::min((int) camera_config.resolution.height, 404));
+    auto camera_info = zed.getCameraInformation(pc_resolution).camera_configuration;
+
     PositionalTrackingParameters positional_tracking_parameters;
     zed.enablePositionalTracking(positional_tracking_parameters);
 
-    print("Skeleton Detection: Loading Module...");
+    
+    //print("Skeleton Detection: Loading Module...");
     // Define the body detection module parameters
     BodyTrackingParameters body_tracking_parameters;
     body_tracking_parameters.enable_tracking = true;
     body_tracking_parameters.enable_segmentation = false; // set true should give person pixel mask
     body_tracking_parameters.detection_model = BODY_TRACKING_MODEL::HUMAN_BODY_MEDIUM;
-    body_tracking_parameters.instance_module_id = 0; // select instance ID
+    body_tracking_parameters.instance_module_id = 1; // select instance ID
     // enabling body tracking for distance, velocity etc of person
     returned_state = zed.enableBodyTracking(body_tracking_parameters);
     if (returned_state != ERROR_CODE::SUCCESS) {
@@ -128,15 +191,16 @@ int main(int argc, char **argv) {
         zed.close();
         return EXIT_FAILURE;
     }
+    
 
     // Define the object detection module parameters - using staandard not custom detection
     ObjectDetectionParameters object_detection_parameters;
     object_detection_parameters.enable_tracking = true;
     object_detection_parameters.enable_segmentation = false; 
-    object_detection_parameters.detection_model = OBJECT_DETECTION_MODEL::MULTI_CLASS_BOX_MEDIUM;
-    object_detection_parameters.instance_module_id = 1; // select instance ID
+    object_detection_parameters.detection_model = OBJECT_DETECTION_MODEL::CUSTOM_BOX_OBJECTS;
+    //object_detection_parameters.instance_module_id = 1; // select instance ID
     // enabling object tracking
-    print("Object Detection: Loading Module...");
+    //print("Object Detection: Loading Module...");
     returned_state = zed.enableObjectDetection(object_detection_parameters);
     if (returned_state != ERROR_CODE::SUCCESS) {
         print("enableObjectDetection", returned_state, "\nExit program.");
@@ -146,12 +210,16 @@ int main(int argc, char **argv) {
 
     // Detection runtime parameters for objects
     int detection_confidence_od = 20;
-    ObjectDetectionRuntimeParameters detection_parameters_rt(detection_confidence_od);
+    ObjectDetectionRuntimeParameters object_detection_parameters_rt(detection_confidence_od);
 
     // Detection runtime parameters for bodies
     // default detection threshold, apply to all object class
     int body_detection_confidence = 20;
     BodyTrackingRuntimeParameters body_tracking_parameters_rt(body_detection_confidence);
+
+    // Create OpenGL Viewer
+    //GLViewer viewer;
+    //viewer.init(argc, argv, camera_info.calibration_parameters.left_cam, true);
 
     // Detection output
     bool quit = false;
@@ -164,110 +232,241 @@ int main(int argc, char **argv) {
     //declare sensor variables
     sl::SensorsData sensors_data;
     sl::SensorsData::IMUData imu_data;
+    //
+    sl::Mat left_sl, point_cloud;
+    sl::Mat left_image, right_image;
+    sl::Pose prev_pose;
+    //initialise yolo model and weights
+    // Weight can be downloaded from https://github.com/AlexeyAB/darknet/releases/download/darknet_yolo_v3_optimal/yolov4.weights
+    auto net = cv::dnn::readNetFromDarknet("/home/kai/codwip_ws/src/zed_pkg/yolov4.cfg", "/home/kai/codwip_ws/src/zed_pkg/yolov4.weights");
+    net.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
+    net.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
+    // net.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
+    // net.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
+    auto output_names = net.getUnconnectedOutLayersNames();
+
+    cv::Mat frame, blob;
+    std::vector<cv::Mat> detections;
 
     bool gl_viewer_available = true;
     cout << setprecision(3);
-//GUI
-#if ENABLE_GUI
 
-    float image_aspect_ratio = camera_config.resolution.width / (1.f * camera_config.resolution.height);
-    int requested_low_res_w = min(1280, (int)camera_config.resolution.width);
-    sl::Resolution display_resolution(requested_low_res_w, requested_low_res_w / image_aspect_ratio);
-    Resolution tracks_resolution(400, display_resolution.height);
-    // create a global image to store both image and tracks view
-    cv::Mat global_image(display_resolution.height, display_resolution.width + tracks_resolution.width, CV_8UC4, 1);
-    // retrieve ref on image part
-    auto image_left_ocv = global_image(cv::Rect(0, 0, display_resolution.width, display_resolution.height));
-    // retrieve ref on tracks view part
-    auto image_track_ocv = global_image(cv::Rect(display_resolution.width, 0, tracks_resolution.width, tracks_resolution.height));
-    // init an sl::Mat from the ocv image ref (which is in fact the memory of global_image)
-    cv::Mat image_render_left = cv::Mat(display_resolution.height, display_resolution.width, CV_8UC4, 1);
-    Mat image_left(display_resolution, MAT_TYPE::U8_C4, image_render_left.data, image_render_left.step);
-    sl::float2 img_scale(display_resolution.width / (float) camera_config.resolution.width, display_resolution.height / (float) camera_config.resolution.height);
-
-
-    // 2D tracks
-    TrackingViewer track_view_generator(tracks_resolution, camera_config.fps, init_parameters.depth_maximum_distance, 3);
-    track_view_generator.setCameraCalibration(camera_config.calibration_parameters);
-
-    string window_name = "ZED| 2D View and Birds view";
-    cv::namedWindow(window_name, cv::WINDOW_NORMAL); // Create Window
-    cv::createTrackbar("Confidence OD", window_name, &detection_confidence_od, 100);
-    cv::createTrackbar("Confidence Body", window_name, &body_detection_confidence, 100);
-
-    char key = ' ';
-
-    requested_low_res_w = min(720, (int)camera_config.resolution.width);
-    Resolution pc_resolution(requested_low_res_w, requested_low_res_w / image_aspect_ratio);
-
-    std::cout << "Res " << display_resolution.width << " " << display_resolution.height << " " << pc_resolution.width << " " << pc_resolution.height << std::endl;
-
-    auto camera_parameters = zed.getCameraInformation(pc_resolution).camera_configuration.calibration_parameters.left_cam;
-    Mat point_cloud(pc_resolution, MAT_TYPE::F32_C4, MEM::GPU);
-    GLViewer viewer;
-    viewer.init(argc, argv, camera_parameters, body_tracking_parameters.enable_tracking);
-#endif
-    
     //loop containing information to be published and updated in real time
     while (true) {
         if (zed.grab() == sl::ERROR_CODE::SUCCESS) { //if camera succesfully initialises
         
+        sensor_msgs::Imu imu_msg;
+        sensor_msgs::MagneticField magnetometer_msg;
 
+        zed.retrieveImage(left_sl, sl::VIEW::LEFT);//grab left image frame
+
+            // Preparing frame
+            cv::Mat left_cv_rgba = slMat2cvMat(left_sl);
+            cv::cvtColor(left_cv_rgba, frame, cv::COLOR_BGRA2BGR);
+
+            //perform object detection using YOLO
+            cv::dnn::blobFromImage(frame, blob, 0.00392, cv::Size(INFERENCE_SIZE, INFERENCE_SIZE), cv::Scalar(), true, false, CV_32F);
+            net.setInput(blob);
+            net.forward(detections, output_names);
+
+            //process detections
+            std::vector<int> indices[NUM_CLASSES];
+            std::vector<cv::Rect> boxes[NUM_CLASSES];
+            std::vector<float> scores[NUM_CLASSES];
+            for (auto& output : detections) {
+                const auto num_boxes = output.rows;
+                for (int i = 0; i < num_boxes; i++) {
+                    auto x = output.at<float>(i, 0) * frame.cols;
+                    auto y = output.at<float>(i, 1) * frame.rows;
+                    auto width = output.at<float>(i, 2) * frame.cols;
+                    auto height = output.at<float>(i, 3) * frame.rows;
+                    cv::Rect rect(x - width / 2, y - height / 2, width, height);
+
+                    for (int c = 0; c < NUM_CLASSES; c++) {
+                        auto confidence = *output.ptr<float>(i, 5 + c);
+                        if (confidence >= CONFIDENCE_THRESHOLD) {
+                            boxes[c].push_back(rect);
+                            scores[c].push_back(confidence);
+                        }
+                    }
+                }
+            }
+
+            //perform non-maximum suppression to remove redundant objects
+            for (int c = 0; c < NUM_CLASSES; c++)
+                cv::dnn::NMSBoxes(boxes[c], scores[c], 0.0, NMS_THRESHOLD, indices[c]);
+
+            //loop through all remaining objects, draw bounding box around object, add class ID and probability to bounding box.
+            std::vector<sl::CustomBoxObjectData> objects_in;
+            for (int c = 0; c < NUM_CLASSES; c++) {
+                for (size_t i = 0; i < indices[c].size(); ++i) {
+                    const auto color = colors[c % NUM_COLORS];
+
+                    auto idx = indices[c][i];
+                    const auto& rect = boxes[c][idx];
+                    auto& rect_score = scores[c][idx];
+
+                    // Fill the detections into the correct format
+                    sl::CustomBoxObjectData tmp;
+                    tmp.unique_object_id = sl::generate_unique_id();
+                    tmp.probability = rect_score;
+                    tmp.label = c;
+                    tmp.bounding_box_2d = cvt(rect);
+                    tmp.is_grounded = (c == 0); // Only the first class (person) is grounded, that is moving on the floor plane
+                    // others are tracked in full 3D space
+                    objects_in.push_back(tmp);
+                    //--
+
+                    cv::rectangle(frame, rect, color, 3);
+
+                    std::ostringstream label_ss;
+                    label_ss << class_names[c] << ": " << std::fixed << std::setprecision(2) << scores[c][idx];
+                    auto label = label_ss.str();
+
+                    int baseline;
+                    auto label_bg_sz = cv::getTextSize(label.c_str(), cv::FONT_HERSHEY_COMPLEX_SMALL, 1, 1, &baseline);
+                    cv::rectangle(frame, cv::Point(rect.x, rect.y - label_bg_sz.height - baseline - 10), cv::Point(rect.x + label_bg_sz.width, rect.y), color, cv::FILLED);
+                    cv::putText(frame, label.c_str(), cv::Point(rect.x, rect.y - baseline - 5), cv::FONT_HERSHEY_COMPLEX_SMALL, 1, cv::Scalar(0, 0, 0));
+                }
+            }
+            // Send the custom detected boxes to the ZED
+            zed.ingestCustomBoxObjects(objects_in);
+
+            cv::imshow("Objects", frame);
+            cv::waitKey(10);
+
+            // Retrieve the tracked objects, with 2D and 3D attributes
+            zed.retrieveObjects(objects, object_detection_parameters_rt);
+            zed.retrieveMeasure(point_cloud, sl::MEASURE::XYZBGRA, sl::MEM::CPU, pc_resolution);
+            zed.retrieveImage(left_image, sl::VIEW::LEFT);
+            zed.retrieveImage(right_image, sl::VIEW::RIGHT);
+
+             // GL Viewer
+            //zed.retrieveMeasure(point_cloud, sl::MEASURE::XYZRGBA, sl::MEM::GPU, pc_resolution);
+            //zed.getPosition(cam_w_pose, sl::REFERENCE_FRAME::WORLD);
+            //viewer.updateData(point_cloud, objects, skeletons, cam_w_pose.pose_data);
+
+
+            //Publishers for all essential data
+            ros::Time current_time = ros::Time::now();
+            n.getParam("visualise", visualise); //check for visualisation parameter status
+
+            
+            //PointCloud publication
+            if (visualise=true){
+                sensor_msgs::PointCloud2Ptr pointcloudMsg = boost::make_shared<sensor_msgs::PointCloud2>();
+                pointcloudMsg->header.stamp = current_time;
+                pointcloudMsg->header.frame_id="map";
+                int ptsCount = pc_resolution.width * pc_resolution.height;
+
+                if (pointcloudMsg->width != pc_resolution.width || pointcloudMsg->height != pc_resolution.height) {
+
+                    pointcloudMsg->is_bigendian = false;
+                    pointcloudMsg->is_dense = false;
+                    pointcloudMsg->width = pc_resolution.width;
+                    pointcloudMsg->height = pc_resolution.height;
+                    sensor_msgs::PointCloud2Modifier modifier(*pointcloudMsg);
+                    modifier.setPointCloud2Fields(4, "x", 1, sensor_msgs::PointField::FLOAT32, "y", 1, sensor_msgs::PointField::FLOAT32,
+                        "z", 1, sensor_msgs::PointField::FLOAT32, "rgb", 1, sensor_msgs::PointField::FLOAT32);
+                }
+
+                // Data copy
+                sl::Vector4<float>* cpu_cloud = point_cloud.getPtr<sl::float4>();
+                float* ptCloudPtr = (float*)(&pointcloudMsg->data[0]);
+
+                // We can do a direct memcpy since data organization is the same
+                memcpy(ptCloudPtr, (float*)cpu_cloud, 4 * ptsCount * sizeof(float));
+
+                // Pointcloud publishing
+                point_cloud_pub.publish(pointcloudMsg);
+            }
+            
+
+        //Object Bounding Box publication
+        visualization_msgs::MarkerArray bbox_array;
+        visualization_msgs::Marker bbox;
+
+        //teb_local_planner obstacle message
+        costmap_converter::ObstacleArrayMsg obstacle_msg;
+        obstacle_msg.header.stamp = ros::Time::now();
+        obstacle_msg.header.frame_id = "map";
 
         //creates boolean message for stopping and slowing and sets them to false at the start of every loop
         bool within1m = false;
         bool within2m = false;
-        // outputs number of people in view for testing purpose
-        //cout << "No. Persons = " << skeletons.body_list.size() << endl;
         
-        /*
-        //loops through all detected bodies
-        for (int i = 0; i < skeletons.body_list.size(); i++) {
-                //retrieves information on detected body
-                sl::BodyData body = skeletons.body_list[i];
-                zed.retrieveBodies(skeletons, body_tracking_parameters_rt);
-                
-                unsigned int body_id = body.id; // Get the body id
-
-                //displays the xyz value of person in view - for calibrate/testing
-                //cout << "Person x position = " << body.position.x << endl;
-                //cout << "Person y position = " << body.position.y << endl;  
-                //cout << "Person z position = " << body.position.z << endl;
-
-                //if person is too close update bools to change speed.
-                if (body.position.z >-1000 ){ // within 1m stop
-
-                    within1m = true;
-                    
-                }
-                if (body.position.z >-2000 ){ //within 2m slow
-            
-                    within2m = true;
-                }
-                
-        }*/
-
-        //zed.retrieveObjects(objects, detection_parameters_rt);
         // Loop through all detected objects
             for (int i = 0; i < objects.object_list.size(); i++) {
-                
+
                 sl::ObjectData object = objects.object_list[i];
-                //if (object.label == sl::OBJECT_CLASS::PERSON){
-                //    cout << "Person x position = " << object.position.x << endl;
-                //    cout << "Person y position = " << object.position.y << endl;  
-                //    cout << "Person z position = " << object.position.z << endl; 
-                //}
+
+                for (int c = 0; c < NUM_CLASSES; c++) {
+                for (size_t e = 0; e < indices[c].size(); ++e) {
+                    auto idx = indices[c][e];
+                    
+
+                    
+                    sl::CustomBoxObjectData tmp;
+                    tmp.unique_object_id = sl::generate_unique_id();
+                    
+                    tmp.label = c;
+                    objects_in.push_back(tmp);
+                    
+                    //if (tmp.is_grounded == (c == 0)){
+                    //    cout << "Person x position = " << object.position.x << endl;
+                    //    cout << "Person y position = " << object.position.y << endl;  
+                    //    cout << "Person z position = " << object.position.z << endl; 
+                    //}
                 //if person is too close publish bools to change robot speed.
-                if (object.position.z >-1000 && object.label == sl::OBJECT_CLASS::PERSON){ //object_label ==1 ==person
+                    if (object.position.y <1000 && tmp.is_grounded == (c == 0)){ //object_label ==1 ==person
 
-                    within1m = true;
-                }
+                     within1m = true;
+                    }
 
-                if (object.position.z >-2000 && object.label == sl::OBJECT_CLASS::PERSON){ //add and if object class = person
+                    if (object.position.y <2000 && tmp.is_grounded == (c == 0)){ //add and if object class = person
 
-                    within2m = true;
-                }
+                       within2m = true;
+                    }
+                    }
+            }
+               
+            // Custom obstacles for teb_local_planner
             
+                costmap_converter::ObstacleMsg polygon_obstacle;
+                polygon_obstacle.id=2; //polygon type obstacle
+                polygon_obstacle.polygon.points.resize(4);
+                polygon_obstacle.polygon.points[0].x= object.position.x + (object.dimensions[0]/2);
+                polygon_obstacle.polygon.points[0].y= object.position.y + (object.dimensions[1]/2);
+                polygon_obstacle.polygon.points[1].x= object.position.x + (object.dimensions[0]/2);
+                polygon_obstacle.polygon.points[1].y= object.position.y - (object.dimensions[1]/2);
+                polygon_obstacle.polygon.points[2].x= object.position.x - (object.dimensions[0]/2);
+                polygon_obstacle.polygon.points[2].y= object.position.y - (object.dimensions[1]/2);
+                polygon_obstacle.polygon.points[3].x= object.position.x - (object.dimensions[0]/2);
+                polygon_obstacle.polygon.points[3].y= object.position.y + (object.dimensions[1]/2);
+                obstacle_msg.obstacles.push_back(polygon_obstacle);
+
+            if (visualise=true){ //can publish a markerArray for visualisation purposes in rviz, parameter set in launch file
+                    bbox.header.frame_id = "map";
+                    //bbox.ns = "object_detection";
+                    bbox.type = visualization_msgs::Marker::CUBE;
+                    bbox.action = visualization_msgs::Marker::ADD;
+                    bbox.color.r = 1.0;
+                    bbox.color.a = 0.25;
+
+                    // Update marker message
+                    bbox.id = i;
+                    bbox.pose.position.x = object.position.x;
+                    bbox.pose.position.y = object.position.y;
+                    bbox.pose.position.z = object.position.z;
+                    bbox.scale.x = object.dimensions[0];
+                    bbox.scale.y = object.dimensions[1];
+                    bbox.scale.z = object.dimensions[2];
+                    bbox.header.stamp = ros::Time::now();
+
+                    // Publish marker message
+                    bbox_array.markers.push_back(bbox);
+                }
+
             }
         // Publish the appropriate messages based on the flags
         std_msgs::Bool stop_msg;
@@ -278,126 +477,69 @@ int main(int argc, char **argv) {
         slow_msg.data = within2m;
         slow_obj_pub.publish(slow_msg);
        
-        sl::Mat point_cloud;
-        zed.retrieveMeasure(point_cloud, sl::MEASURE::XYZRGBA);
-
-        //converting ZED point cloud to ROS sensor_msgs::PointCloud2
-        sensor_msgs::PointCloud2 ros_point_cloud;
-        ros_point_cloud.header.stamp = ros::Time::now();
-        ros_point_cloud.header.frame_id = "zed_camera_frame"; //set desired frame id
-        ros_point_cloud.height = point_cloud.getHeight();
-        ros_point_cloud.width = point_cloud.getWidth();
-        ros_point_cloud.is_dense = false;
-        ros_point_cloud.is_bigendian = false;
-        ros_point_cloud.point_step = sizeof(float) * 4;
-        ros_point_cloud.row_step = ros_point_cloud.point_step * ros_point_cloud.width;
-        ros_point_cloud.data.resize(ros_point_cloud.height * ros_point_cloud.row_step);
-
-        //copy data
-        memcpy(&ros_point_cloud.data[0], point_cloud.getPtr<sl::float4>(), ros_point_cloud.data.size());
-        //publish point cloud
-        point_cloud_pub.publish(ros_point_cloud);
-       
-        // gets required information for odom
-        zed.getPosition(cam_w_pose, sl::REFERENCE_FRAME::WORLD);
-        zed.getSensorsData(sensors_data, sl::TIME_REFERENCE::CURRENT);
-        /*
-        //Broadcast odom -> base_link TF
-        static tf::TransformBroadcaster odom_broadcaster;
-        tf::Transform odom_trans;
-        odom_trans.setOrigin( tf::Vector3(cam_w_pose.getTranslation().x, cam_w_pose.getTranslation().y, cam_w_pose.getTranslation().z));
-        tf::Quaternion q;
-        q.setRPY(cam_w_pose.getOrientation().ox, cam_w_pose.getOrientation().oy, cam_w_pose.getOrientation().oz);
-        odom_trans.setRotation(q);
-        odom_broadcaster.sendTransform(tf::StampedTransform(odom_trans, ros::Time::now(), "odom", "base_link"));
-        
-        //Calculate position and orientations
-        nav_msgs::Odometry odom_msg;
-        odom_msg.header.frame_id = "odom";
-        odom_msg.child_frame_id = "base_link";
-        odom_msg.pose.pose.position.x = cam_w_pose.getTranslation().x;
-        odom_msg.pose.pose.position.y = cam_w_pose.getTranslation().y;
-        odom_msg.pose.pose.position.z = cam_w_pose.getTranslation().z;
-        odom_msg.pose.pose.orientation.x = cam_w_pose.getOrientation().ox;
-        odom_msg.pose.pose.orientation.y = cam_w_pose.getOrientation().oy;
-        odom_msg.pose.pose.orientation.z = cam_w_pose.getOrientation().oz;
-
-        odom_msg.twist.twist.linear.x = 0;
-        odom_msg.twist.twist.linear.y = 0;
-        odom_msg.twist.twist.linear.z = 0;
-
-        odom_msg.twist.twist.angular.x = sensors_data.imu.angular_velocity.x;
-        odom_msg.twist.twist.angular.y = sensors_data.imu.angular_velocity.y;
-        odom_msg.twist.twist.angular.z = sensors_data.imu.angular_velocity.z;
-
-        odom_pub.publish(odom_msg);
-*/
-    }
-
-    //GUI 
-    #if ENABLE_GUI
-            gl_viewer_available &&
-    #endif
-            !quit; {
-
-        auto grab_state = zed.grab(runtime_parameters);
-        if (grab_state == ERROR_CODE::SUCCESS) {
-            detection_parameters_rt.detection_confidence_threshold = detection_confidence_od;
-            returned_state = zed.retrieveObjects(objects, detection_parameters_rt, object_detection_parameters.instance_module_id);
-
-            body_tracking_parameters_rt.detection_confidence_threshold = body_detection_confidence;
-            returned_state = zed.retrieveBodies(skeletons, body_tracking_parameters_rt, body_tracking_parameters.instance_module_id);
-        //GUI             
-        #if ENABLE_GUI
-            zed.retrieveImage(image_left, VIEW::LEFT, MEM::CPU, display_resolution);
-            zed.retrieveMeasure(point_cloud, MEASURE::XYZRGBA, MEM::GPU, pc_resolution);
-            image_render_left.copyTo(image_left_ocv);
-            render_2D(image_left_ocv, img_scale, objects, skeletons, true, body_tracking_parameters.enable_tracking);
-
-            zed.getPosition(cam_w_pose, REFERENCE_FRAME::WORLD);
-
-            viewer.updateData(point_cloud, objects, skeletons, cam_w_pose.pose_data);
-
-            track_view_generator.generate_view(objects, cam_w_pose, image_track_ocv, objects.is_tracked);
-        #else
-            cout << "Detected " << objects.object_list.size() << " Object(s)" << endl;
-        #endif
+        obs_pub.publish(obstacle_msg);
+        bbox_pub.publish(bbox_array);
 
 
-            if (is_playback && zed.getSVOPosition() == zed.getSVONumberOfFrames())
-                quit = true;
-        }        
-    //GUI
-    #if ENABLE_GUI
-        gl_viewer_available = viewer.isAvailable();
-        // as image_left_ocv and image_track_ocv are both ref of global_image, no need to update it
-        cv::imshow(window_name, global_image);
-        key = cv::waitKey(10);
-        if (key == 'i') {
-            track_view_generator.zoomIn();
-        } else if (key == 'o') {
-            track_view_generator.zoomOut();
-        } else if (key == 'q') {
-            quit = true;
+
+ //Sensor Data
+    // Used to store sensors data.
+    SensorsData sensors_data;
+
+    // Used to store sensors timestamps and check if new data is available.
+    TimestampHandler ts;
+
+    // Retrieve sensors data 
+    auto start_time = std::chrono::high_resolution_clock::now();
+    //int count = 0;
+    //double elapse_time = 0;
+
+        if (zed.getSensorsData(sensors_data, TIME_REFERENCE::CURRENT) == ERROR_CODE::SUCCESS) {
+
+            // Check if a new IMU sample is available.
+            if (ts.isNew(sensors_data.imu)) {
+                //cout << "Sample " << count++ << "\n";
+                //cout << " - IMU:\n";
+                //cout << " \t Orientation: {" << sensors_data.imu.pose.getOrientation() << "}\n";
+                //cout << " \t Acceleration: {" << sensors_data.imu.linear_acceleration << "} [m/sec^2]\n";
+                //cout << " \t Angular Velocitiy: {" << sensors_data.imu.angular_velocity << "} [deg/sec]\n";
+                imu_msg.header.stamp =ros::Time::now();
+                imu_msg.header.frame_id = "imu_frame";
+                imu_msg.orientation.x = sensors_data.imu.pose.getOrientation().ox;
+                imu_msg.orientation.y = sensors_data.imu.pose.getOrientation().oy;
+                imu_msg.orientation.z = sensors_data.imu.pose.getOrientation().oz;
+                imu_msg.angular_velocity.x = sensors_data.imu.angular_velocity.x;
+                imu_msg.angular_velocity.y = sensors_data.imu.angular_velocity.y;
+                imu_msg.angular_velocity.z = sensors_data.imu.angular_velocity.z;
+                imu_msg.linear_acceleration.x = sensors_data.imu.linear_acceleration.x;
+                imu_msg.linear_acceleration.y = sensors_data.imu.linear_acceleration.y;
+                imu_msg.linear_acceleration.z = sensors_data.imu.linear_acceleration.z;
+                
+                imu_pub.publish(imu_msg);
+
+                //cout << " - Magnetometer\n \t Magnetic Field: {" << sensors_data.magnetometer.magnetic_field_calibrated << "} [uT]\n";
+                magnetometer_msg.header.stamp = ros::Time::now();
+                magnetometer_msg.header.frame_id = "base_link";
+                magnetometer_msg.magnetic_field.x = sensors_data.magnetometer.magnetic_field_calibrated.x;
+                magnetometer_msg.magnetic_field.y = sensors_data.magnetometer.magnetic_field_calibrated.y;
+                magnetometer_msg.magnetic_field.z = sensors_data.magnetometer.magnetic_field_calibrated.z;
+
+                magnetometer_pub.publish(magnetometer_msg);
         }
-    #endif
+        // Compute the elapsed time since the beginning of the main loop.
+        //elapse_time = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - start_time).count();
+        }
+     
+   //end sensor data
+
+   
+        
+    }
     }
 
-
-    }
-
-//GUI   
-#if ENABLE_GUI
-    viewer.exit();
-    point_cloud.free();
-    image_left.free();
-#endif
-    //Close
-    zed.disableObjectDetection();
-    zed.close();
-    return EXIT_SUCCESS;
-}
-
+    
+ }
+    
 //Errors function
 void print(string msg_prefix, ERROR_CODE err_code, string msg_suffix) {
     cout << "";
