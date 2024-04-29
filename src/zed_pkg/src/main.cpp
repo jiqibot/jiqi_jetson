@@ -138,8 +138,8 @@ int main(int argc, char **argv) {
     ros::Publisher left_pub = n.advertise<sensor_msgs::Image>("zed_left_image", 1);
     ros::Publisher right_pub = n.advertise<sensor_msgs::Image>("zed_right_image", 1);
     ros::Publisher stereo_pub = n.advertise<sensor_msgs::Image>("zed_stereo_image", 1);
-    ros::Publisher imu_pub =n.advertise<sensor_msgs::Imu>("imu_data",10);
-    ros::Publisher magnetometer_pub = n.advertise<sensor_msgs::MagneticField>("/imu/magnetometer", 10);
+    ros::Publisher imu_pub =n.advertise<sensor_msgs::Imu>("imu/data_raw",10);
+    ros::Publisher magnetometer_pub = n.advertise<sensor_msgs::MagneticField>("/imu/mag", 10);
 
 
     //read object class names from text file
