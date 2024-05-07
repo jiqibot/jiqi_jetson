@@ -2,33 +2,26 @@
 
 <launch>
 
+  <!-- Global Parameters -->
+  <param name="/use_sim_time" value="false"/>
 
+  <node pkg="zed_pkg" type="main" name="zed2Cam" output="screen">
+    <param name="visualise" type="bool" value="true" />
+  </node>
 
-<param name="/use_sim_time" value="false"/>
-
-
-<node pkg="zed_pkg" type="main" name="zed2Cam" output="screen">
- <param name="visualise" type="bool" value="true" />
-</node>
-
-<node pkg="kalman_filter" type="kalman_filter_new.py" name="kalman_filter_new" output="screen">
-</node>
-
-
-
-  <node pkg="nodelet" type="nodelet" name="imu_manager"
-    args="manager" output="screen" />
-
- 
+  <node pkg="nodelet" type="nodelet" name="imu_manager" args="manager" output="screen" />
 
   <node pkg="nodelet" type="nodelet" name="ImuFilterNodelet"
     args="load imu_filter_madgwick/ImuFilterNodelet imu_manager"
     output="screen">
-
     <param name="publish_tf" value="false"/>
-
   </node>
 
-
+  <!-- RViz -->
+  <!-- Subscriptions: -->
+  <!-- Publications: -->
+  <!-- NEED TO RUN DEFAULT RVIZ AND CONFIGURE VIEW BEFORE SAVING CONFIG TO config.rviz, THEN SWITCH TO COMMENTED VERSION -->
+  <node pkg="rviz" type="rviz" name="rviz" args="-d $(find articubot)/rviz/teb_config.rviz"/>
+  <!-- <node pkg="rviz" type="rviz" name="rviz" args="-d $(find jiqi_navigation)/config/rviz/config.rviz" /> -->
 
 </launch>
