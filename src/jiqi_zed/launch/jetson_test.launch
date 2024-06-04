@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+
+<launch>
+
+<param name="/use_sim_time" value="false"/>
+
+<node pkg="zed_pkg" type="zed2Cam" name="zed2Cam" output="screen">
+ <param name="visualise" type="bool" value="true" />
+</node>
+
+
+</launch>
