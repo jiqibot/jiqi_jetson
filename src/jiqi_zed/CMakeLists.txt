@@ -76,7 +76,7 @@ link_directories(/usr/local/cuda/lib64)
 include_directories(/usr/include/x86_64-linux-gnu/)
 link_directories(/usr/lib/x86_64-linux-gnu/)
 
-add_executable (zed2Cam src/main.cpp src/GLViewer.cpp src/TrackingViewer.cpp)
+add_executable (zed2Cam src/jiqi_zed.cpp src/GLViewer.cpp src/TrackingViewer.cpp)
 target_link_libraries(zed2Cam
                         ${SPECIAL_OS_LIBS}
                         ${ZED_LIBS}
@@ -89,7 +89,7 @@ target_link_libraries(zed2Cam
 )
 
 ##added by kai
-add_executable (main src/main.cpp src/GLViewer.cpp src/TrackingViewer.cpp)
+add_executable (main src/jiqi_zed.cpp src/GLViewer.cpp src/TrackingViewer.cpp)
 target_link_libraries(main 
                         ${SPECIAL_OS_LIBS}
                         ${ZED_LIBS}
